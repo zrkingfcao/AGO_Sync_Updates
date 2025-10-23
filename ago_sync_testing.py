@@ -131,9 +131,6 @@ def processOperations(connection, ago):
                         f.write(f"\nPost Processing Inserts - {insert}\nPost Processing Deletes - {delete}")
                     ##END TODO
 
-                    ##FIXME: Remove exit() when done testing 10/23/2025
-                    exit()
-
                     if len(delete)>0:
                         sync_operations.updateDeleted(delete, destination)
                         #print(f"{k} Removed: {delete} from {destination}")
@@ -215,3 +212,4 @@ if __name__ == '__main__':
     elapsed = timing.timer(start,end)
     print(f"Time to complete: {elapsed[0]} min {elapsed[1]} sec")
     log.info(f"AGO Sync completed in {elapsed[0]} min {elapsed[1]} sec")
+
