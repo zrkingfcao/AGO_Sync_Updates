@@ -79,12 +79,13 @@ def returnInserted(tblName, cursor, ago, whereClause=None):
         srcTbleName = 'TAXPARCEL_CONDOUNITSTACK_LGIM'
     else: 
         srcTbleName = tblName
+
     if whereClause is None:
         queryInserts = f"""SELECT GUID FROM {tblName} 
         WHERE GDB_BRANCH_ID = 0 AND
         GDB_FROM_DATE > (SELECT {LastRunDate} FROM sde.LastEditUpdate WHERE TableName = \'{tblName}\')
         AND GDB_DELETED_BY IS NULL
-        AND GUID NOT IN (SELECT GUID FROM GIS_READ_ONLY.sde.{srcTbleName})
+        AND GUID IN (SELECT GUID FROM GIS_READ_ONLY.sde.{srcTbleName})
         GROUP BY GUID
         """
     else:
@@ -92,7 +93,7 @@ def returnInserted(tblName, cursor, ago, whereClause=None):
         WHERE GDB_BRANCH_ID = 0 AND
         GDB_FROM_DATE > (SELECT {LastRunDate} FROM sde.LastEditUpdate WHERE TableName = \'{tblName}\')
         AND GDB_DELETED_BY IS NULL 
-        AND GUID NOT IN (SELECT GUID FROM GIS_READ_ONLY.sde.{srcTbleName})
+        AND GUID IN (SELECT GUID FROM GIS_READ_ONLY.sde.{srcTbleName})
         AND {whereClause}
         GROUP BY GUID
         """
@@ -160,14 +161,11 @@ def returnDeleted(tblName, cursor, ago, whereClause=None):
     # else:
     #     queryDeletes = f"SELECT DISTINCT(GUID) FROM {tblName} WHERE GDB_BRANCH_ID = 0 AND GDB_DELETED_AT > (SELECT {LastRunDate} FROM sde.LastEditUpdate WHERE TableName = \'{tblName}\') AND {whereClause}"
 
-    ##New Testing 10/14/2025
-    if whereClause is None:
+    if whereClause is None or "RetiredByRecord" not in whereClause:
         queryDeletes = f"SELECT DISTINCT(GUID) FROM {tblName} WHERE GDB_BRANCH_ID = 0 AND GDB_IS_DELETE = 1 AND GDB_FROM_DATE > (SELECT {LastRunDate} FROM sde.LastEditUpdate WHERE TableName = \'{tblName}\')"
-    elif "RetiredByRecord" in whereClause:
-        queryDeletes = f"SELECT DISTINCT(GUID) FROM {tblName} WHERE GDB_BRANCH_ID = 0 AND GDB_FROM_DATE > (SELECT {LastRunDate} FROM sde.LastEditUpdate WHERE TableName = \'{tblName}\') AND RetiredByRecord IS NOT NULL"
-    else:
-        queryDeletes = f"SELECT DISTINCT(GUID) FROM {tblName} WHERE GDB_BRANCH_ID = 0 AND GDB_IS_DELETE = 1 AND GDB_FROM_DATE > (SELECT {LastRunDate} FROM sde.LastEditUpdate WHERE TableName = \'{tblName}\') AND {whereClause}"
-
+    if whereClause is not None and "RetiredByRecord" in whereClause:
+        queryDeletes = f"SELECT DISTINCT(GUID) FROM {tblName} WHERE GDB_BRANCH_ID = 0 AND GDB_IS_DELETE = 1 AND GDB_FROM_DATE > (SELECT {LastRunDate} FROM sde.LastEditUpdate WHERE TableName = \'{tblName}\') OR (GDB_BRANCH_ID = 0 AND GDB_FROM_DATE > (SELECT {LastRunDate} FROM sde.LastEditUpdate WHERE TableName = \'{tblName}\') AND RetiredByRecord IS NOT NULL)"
+     ##FIXME: Consider returning records that were erroneously updated to fall outside of where clause parameters less the Retired By Record criteria
 
     returnDeletes = cursor.execute(queryDeletes)
     deleteRecs = [row[0] for row in returnDeletes]
@@ -257,8 +255,32 @@ def returnUpdatedJoin(cursor, ago):
                     updateTables[i[0]] += [i[1]]
 
         return updateTables 
+
     
     except Exception as e:
         import traceback
         tb = sys.exc_info()[2]
         print(f"ReturnAgoEdits.py returnUpdatedJoin function exception on line {tb.tb_lineno} {e}")
+
+def checkEditingErrors(tblName, cursor, ago, whereClause):
+    LastRunDate = "LastRunDate_AGO" if ago else "LastRunDate"
+    ##Remove retired by record criteria and invert where clause logic
+    if 'RetiredByRecord IS NULL' in whereClause: 
+        whereClause = whereClause.replace(' AND (RetiredByRecord IS NULL)', '')
+    if ' = ' in whereClause: 
+        whereClause = whereClause.replace(' = ', ' <> ')
+    if ' >= ' in whereClause: 
+        whereClause = whereClause.replace(' >= ', ' <= ')
+    if ' <= ' in whereClause: 
+        whereClause = whereClause.replace(' <= ', ' >= ')
+    if ' is ' in whereClause:
+        whereClause = whereClause.replace(' is ', ' is not ')
+
+    queryErrors = f"""SELECT DISTINCT(GUID) FROM {tblName} 
+    WHERE GDB_BRANCH_ID = 0 AND
+    GDB_FROM_DATE > (SELECT {LastRunDate} FROM sde.LastEditUpdate WHERE TableName = \'{tblName}\')
+    AND {whereClause}
+    """
+    returnErrors = cursor.execute(queryErrors)
+    errorRecs = [row[0] for row in returnErrors]
+    return errorRecs 
