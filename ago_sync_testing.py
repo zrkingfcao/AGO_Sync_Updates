@@ -25,7 +25,6 @@ def processOperations(connection, ago):
             return 0
         return 1 + returnDims(lst[0])
     
-    ##:TODO Test function
     def returnWhereClause(table, cursor):
         queryWC = f"SELECT WhereClause FROM sde.LastEditUpdate WHERE TableName = \'{table}\'"
         returnWC = cursor.execute(queryWC)
@@ -65,9 +64,10 @@ def processOperations(connection, ago):
                 else:
                     df = return_df_ago_test.returnDF(k)
                 source = df.iat[1,1]
-                ##TESTING: Pass a tokenized URL as demonstrated below:
+
                 token = getToken.generateToken()
                 destination = f"{df.iat[2,1]}?token={token}"
+
 
                 guids = []
                 with arcpy.da.SearchCursor(destination, 'GUID') as guidCursor:
@@ -77,6 +77,14 @@ def processOperations(connection, ago):
                 insert = list(set(edits) - set(guids))
                 update = list(set(edits) & set(guids))
                 delete = return_ago_edits.returnDeleted(k, cursor, ago, whereClause)
+                ##FIXME: Use return_ago_edits.checkEditingErrors() to identify edits made causing feature to fall outside of where clause parameters, omit where clauses
+                ## that are only comprised of 'RetiredByRecord IS NULL' as these features will be passed to the delete list via the necessary query. If these are found
+                ## in the AGO service, they will need to be removed as they are no longer considered valid features
+                if whereClause is not None and whereClause != 'RetiredByRecord IS NULL':
+                    editErrors = return_ago_edits.checkEditingErrors(k, cursor, ago, whereClause)
+                    if editErrors is not None:
+                        delete =  list(dict.fromkeys(list((set(editErrors) & set(guids))) + delete)) 
+                log.info(f"Total Insert Records before processing: {len(insert)}, Total Update Records before processing: {len(update)}, Total Delete Records before processing: {len(delete)}")
 
                 ##Check if values in insert can also be found in delete list, if true, remove the value from insert to avoid unneccesary processing
                 if len (insert) > 0 and len(delete) > 0: 
@@ -88,7 +96,7 @@ def processOperations(connection, ago):
                     os.makedirs(adminDir)
                 adminFile = os.path.join(adminDir,f"{k}_{now}.txt")
                 with open(adminFile, "w") as f:
-                    f.write(f"Left table Updates:\nInsert - {insert}\nUpdate - {update}\nDelete - {delete}")
+                    f.write(f"Left table Updates:\nInsert - {insert}\nUpdate - {update}\nDelete - {delete}\nRight Table Updates:\n{v}")
                 ##END TODO
                 
                 #print(f"Insert - {insert}\nUpdate - {update}\nDelete - {delete}")
@@ -98,38 +106,31 @@ def processOperations(connection, ago):
                 #         df = ReturnDf.returnDF('CondoUnitStack_LGIM')
                 #     case _:
                 #         df = ReturnDf.returnDF(k)
-                
-                if len(update)>0 or len(v)>0 or len(delete)>0 or len(insert)>0:
-                    if len(update)>0 or len(v)>0:
-                        dims = returnDims(v)
-                        if dims == 2: v = v[0]
-                        ##TODO: Remove when done testing LGIM updates, will not be necessary to track data movement once POC is working properly
-                        # with open(adminFile, "a") as f:
-                        #     f.write(f"\nRight Table Updates:\n{v}")
-                        ##END TODO
-                        #print(f"Left Table Updates: {update}\nRight Table Updates:\n{v}")
-                        if len(update)>0 and len(v) == 0:
-                            print(f"Left Update > 0 and Right Update = 0")
-                            delete = list(set(delete + update))
-                            insert = list(set(insert + update))
-                        elif len(update) == 0 and len(v)>0:
-                            print(f"Left Update = 0 and Right Update > 0")
-                            #print(f"Value for updates returned from dictionary using the _returnUpdatedJoin method {v}")
-                            ##Check if values in v can also be found in insert and delete lists, if true, remove the value from v to avoid redundant processing
-                            for i in v:
-                                if i in insert or i in delete:
-                                    v.remove(i)
-                            delete = list(set(delete + v))
-                            insert = list(set(insert + v))
-                        else:
-                            print(f"Left Update > 0 and Right Update > 0") 
-                            delete = list(set(delete + v + update))
-                            insert = list(set(insert + v + update))   
 
+                ##Adjust insert and delete tables to include update values as these will be treated as delete from destination table followed by update from source table
+                if len(update)>0 or len(v)>0:
+                    dims = returnDims(v)
+                    if dims == 2: v = v[0]
                     ##TODO: Remove when done testing LGIM updates, will not be necessary to track data movement once POC is working properly
-                    with open(adminFile, "a") as f:
-                        f.write(f"\nPost Processing Inserts - {insert}\nPost Processing Deletes - {delete}")
+                    # with open(adminFile, "a") as f:
+                    #     f.write(f"\nRight Table Updates:\n{v}")
                     ##END TODO
+                    #print(f"Left Table Updates: {update}\nRight Table Updates:\n{v}")
+                    
+                    if len(v) > 0 and len(update) > 0:
+                        log.info(f"Left table update count: {len(update)}, Right table update count: {len(v)}")
+                        insert = list(set(insert + v + update)) 
+                        delete = list(set(delete + v + update))
+                    if len(v) > 0 and len(update) == 0:
+                        log.info(f"No left table updates, Right table update count: {len(v)}")
+                        insert = list(set(insert + v)) 
+                        delete = list(set(delete + v))
+                    if len(v) == 0 and len(update) > 0:
+                        log.info(f"No right table updates, Left table update count: {len(update)}")
+                        insert = list(set(insert + update)) 
+                        delete = list(set(delete + update))                       
+        
+                    log.info(f"Total Insert Records after processing: {len(insert)}, Total Delete Records after processing: {len(delete)}")
 
                     if len(delete)>0:
                         sync_operations.updateDeleted(delete, destination)
@@ -212,4 +213,3 @@ if __name__ == '__main__':
     elapsed = timing.timer(start,end)
     print(f"Time to complete: {elapsed[0]} min {elapsed[1]} sec")
     log.info(f"AGO Sync completed in {elapsed[0]} min {elapsed[1]} sec")
-
